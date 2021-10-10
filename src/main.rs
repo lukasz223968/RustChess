@@ -775,7 +775,6 @@ struct Move {
     from_square: Square,
     to_square: Square,
     promotion: Option<PieceType>,
-    drop: Option<PieceType>,
 }
 impl Boolean for Option<Square>{
     fn bool(&self) -> bool {
@@ -794,7 +793,7 @@ impl Boolean for Bitboard {
 }
 impl Boolean for Move {
     fn bool(&self) -> bool {
-        self.from_square.bool() || self.from_square.bool() || self.promotion.bool() || self.drop.bool()
+        self.from_square.bool() || self.from_square.bool() || self.promotion.bool()
     }
 }
 impl Boolean for bool {
@@ -805,11 +804,7 @@ impl Boolean for bool {
 impl Move {
     fn uci(&self) -> String {
         let mut result = String::new();
-        if let Some(drop) = self.drop {
-            result.push(piece_symbol(drop).unwrap().to_ascii_uppercase());
-            result.push('@');
-            result.push_str(SQUARE_NAMES[self.to_square as usize]);
-        } else if let Some(promotion) = self.promotion {
+        if let Some(promotion) = self.promotion {
             result.push_str(SQUARE_NAMES[self.from_square as usize]);
             result.push_str(SQUARE_NAMES[self.to_square as usize]);
             result.push(piece_symbol(promotion).unwrap());
@@ -830,15 +825,6 @@ impl Move {
     fn from_uci(uci: &str) -> Move {
         if uci == "0000" {
             Move::null()
-        } else if uci.len() == 4 && uci.chars().nth(1).unwrap() == '@' {
-            let drop = Some(uci.chars().nth(0).unwrap() as u8);
-            let square = parse_square(&uci[2..]);
-            Move {
-                from_square: square,
-                to_square: square,
-                drop: drop as Option<u8>,
-                promotion: None,
-            }
         } else if uci.len() == 4 || uci.len() == 5 {
             let from_square = parse_square(&uci[..2]);
             let to_square = parse_square(&uci[2..4]);
@@ -851,7 +837,6 @@ impl Move {
             Move {
                 from_square: from_square,
                 to_square: to_square,
-                drop: None,
                 promotion: promotion,
             }
         } else {
@@ -862,7 +847,6 @@ impl Move {
         Move {
             from_square: 0,
             to_square: 0,
-            drop: None,
             promotion: None,
         }
     }
@@ -1545,7 +1529,6 @@ impl Board {
                     yield Move {
                         from_square: from_square as Square,
                         to_square: to_square as Square,
-                        drop: None,
                         promotion: None,
                     }
                 }
@@ -1566,39 +1549,11 @@ impl Board {
                     & self.baseboard.occupied_co[!self.turn as usize]
                     & to_mask;
                 for to_square in scan_reversed(targets) {
-                    if square_rank(to_square as Square) < 8 {
-                        yield Move {
-                            from_square: from_square as Square,
-                            to_square: to_square as Square,
-                            drop: Some(QUEEN),
-                            promotion: None,
-                        };
-                        yield Move {
-                            from_square: from_square as Square,
-                            to_square: to_square as Square,
-                            drop: Some(ROOK),
-                            promotion: None,
-                        };
-                        yield Move {
-                            from_square: from_square as Square,
-                            to_square: to_square as Square,
-                            drop: Some(BISHOP),
-                            promotion: None,
-                        };
-                        yield Move {
-                            from_square: from_square as Square,
-                            to_square: to_square as Square,
-                            drop: Some(KNIGHT),
-                            promotion: None,
-                        };
-                    } else {
-                        yield Move {
-                            from_square: from_square as Square,
-                            to_square: to_square as Square,
-                            drop: None,
-                            promotion: None,
-                        };
-                    }
+                    yield Move {
+                        from_square: from_square as Square,
+                        to_square: to_square as Square,
+                        promotion: None,
+                    };
                 }
             }
             let mut single_moves = 0;
@@ -1621,39 +1576,11 @@ impl Board {
                     (8 as u8).wrapping_neg()
                 });
 
-                if square_rank(to_square as Square) < 8 {
-                    yield Move {
-                        from_square: from_square as Square,
-                        to_square: to_square as Square,
-                        drop: Some(QUEEN),
-                        promotion: None,
-                    };
-                    yield Move {
-                        from_square: from_square as Square,
-                        to_square: to_square as Square,
-                        drop: Some(ROOK),
-                        promotion: None,
-                    };
-                    yield Move {
-                        from_square: from_square as Square,
-                        to_square: to_square as Square,
-                        drop: Some(BISHOP),
-                        promotion: None,
-                    };
-                    yield Move {
-                        from_square: from_square as Square,
-                        to_square: to_square as Square,
-                        drop: Some(KNIGHT),
-                        promotion: None,
-                    };
-                } else {
-                    yield Move {
-                        from_square: from_square as Square,
-                        to_square: to_square as Square,
-                        drop: None,
-                        promotion: None,
-                    };
-                }
+                yield Move {
+                    from_square: from_square as Square,
+                    to_square: to_square as Square,
+                    promotion: None,
+                };
             }
 
             for to_square in scan_reversed(double_moves) {
@@ -1665,7 +1592,6 @@ impl Board {
                 yield Move {
                     from_square: from_square as Square,
                     to_square: to_square as Square,
-                    drop: None,
                     promotion: None,
                 }
             }
@@ -1699,7 +1625,6 @@ impl Board {
                 yield Move {
                     from_square: capturer as Square,
                     to_square: self.ep_square.unwrap() as Square,
-                    drop: None,
                     promotion: None,
                 };
             }
@@ -1751,7 +1676,6 @@ impl Board {
     }
     fn is_pseudo_legal(&self, m: Move) -> bool {
         if !m.bool() { return false; }
-        if m.drop.bool() { return false; }
         
         let piece = self.baseboard.piece_type_at(m.from_square);
 
@@ -2151,12 +2075,6 @@ impl Board {
             self.turn != self.turn;
             return;
         }
-        if m.drop != None {
-            self.baseboard
-                ._set_piece_at(m.to_square, m.drop.unwrap(), self.turn, self.turn);
-            self.turn != self.turn;
-            return;
-        }
         if self.is_zeroing(m) {
             self.halfmove_clock = 0;
         }
@@ -2295,7 +2213,6 @@ impl Board {
         let touched = BB_SQUARES[m.from_square as usize] ^ BB_SQUARES[m.to_square as usize];
         touched & self.baseboard.pawns != 0
             || touched & self.baseboard.occupied_co[!self.turn as usize] != 0
-            || m.drop == Some(PAWN)
     }
     fn reduces_castling_rights(&self, m: Move) -> bool {
         let cr = self.clean_castling_rights();
@@ -2603,7 +2520,7 @@ impl Board {
                 for to_square in scan_reversed(BB_KING_ATTACKS[king as usize] 
                     & !self.baseboard.occupied_co[self.turn as usize] & !attacked & to_mask){
 
-                    yield Move {from_square: king, to_square: to_square, drop: None, promotion: None };
+                    yield Move {from_square: king, to_square: to_square, promotion: None };
                 }
             }
             let checker = msb(checkers);
@@ -2713,7 +2630,7 @@ impl Board {
                     || self.attacked_for_king(king_path | king, self.baseboard.occupied ^ king)
                     || self.attacked_for_king(king_to, self.baseboard.occupied ^ king ^ rook ^ rook_to)) {
 
-                        yield Move{from_square: msb(king), to_square: candidate, drop: None, promotion: None};
+                        yield Move{from_square: msb(king), to_square: candidate, promotion: None};
                     }
             }
         })
@@ -3019,7 +2936,7 @@ fn main() {
     // println!("rays: {:?}", rays()[0]);
     let mut board = Board::new(Some("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"));
     println!("{}", board.baseboard.unicode(false, false, "."));
-    board.push(Move::from_uci("D2D4"));
+    // board.push(Move::from_uci("D2D4"));
 
     println!("{}", board.baseboard.unicode(false, false, "."));
     println!("moves: {:#?}", board.generate_legal_moves(BB_ALL, BB_ALL).collect::<Vec<Move>>());
