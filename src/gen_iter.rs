@@ -2,7 +2,7 @@
 
 #![feature(generators, generator_trait)]
 
-//
+// slightly modified gen-iter crate by tinaun: https://github.com/tinaun/gen-iter
 
 use std::ops::{Generator, GeneratorState};
 use std::iter::Iterator;
