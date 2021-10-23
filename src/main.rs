@@ -8,7 +8,7 @@
 #![allow(dead_code)]
 #![macro_use]
 use core::panic;
-use std::{collections::HashSet};
+use std::{collections::HashSet, fs::File};
 
 extern crate lazy_static;
 extern crate auto_ops;
@@ -16,6 +16,8 @@ mod init;
 mod pgn;
 mod gen_iter;
 use init::{Board, Move};
+
+use crate::pgn::read_game;
 
 
 fn main() {
@@ -42,6 +44,8 @@ fn main() {
     c = c.add_variation(Move::from_uci("C2C4"), "fdsa", "hdsa",HashSet::new());
     let board = c.board();
     println!("{}", board.baseboard.unicode(board.turn, false, "."));
+    let v = read_game(pgn::BufReader::open("test.txt").expect("couldn't convert file to bufreader")).expect("No game:(");
+    println!("Game headers : {:?}", v.borrow().result().root);
 }
 
 // extern crate test;

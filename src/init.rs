@@ -2,6 +2,7 @@
 use counter::Counter;
 use regex::Regex;
 use lazy_static::lazy_static;
+use core::panic;
 use std::{cmp::max, collections::{HashMap, VecDeque}, fmt, fmt::Formatter, hash::Hash, intrinsics::{bitreverse, log2f64}, mem::MaybeUninit, ops::{self, BitOr, RangeBounds}, path::Iter, process::Output, result};
 
 
@@ -52,6 +53,12 @@ fn piece_symbol(piece_type: PieceType) -> Option<char> {
 }
 fn piece_name(piece_name: PieceType) -> Option<&'static str> {
     PIECE_NAMES[piece_name as usize]
+}
+fn parse_file_name(c: char) -> u8 {
+    c as u8 - 0x61u8
+}
+fn parse_rank_name(c: char) -> u8 {
+    c as u8 - 0x31u8
 }
 fn piece_type(piece_symbol: Option<char>) -> Option<u8> {
     match piece_symbol {
@@ -246,9 +253,9 @@ pub const SQUARE_NAMES_180: [&str; 64] = [
     "a4", "b4", "c4", "d4", "e4", "f4", "g4", "h4", "a3", "b3", "c3", "d3", "e3", "f3", "g3", "h3",
     "a2", "b2", "c2", "d2", "e2", "f2", "g2", "h2", "a1", "b1", "c1", "d1", "e1", "f1", "g1", "h1",
 ];
-pub fn parse_square(name: &str) -> Square {
-    let file: i32 = name.chars().nth(0).unwrap() as i32 - 'A' as i32;
-    let rank: i32 = name.chars().nth(1).unwrap() as i32 - '1' as i32;
+pub fn parse_square(mut name: &str) -> Square {
+    let file: i32 = name.to_ascii_uppercase().chars().nth(0).unwrap() as i32 - 'A' as i32;
+    let rank: i32 = name.to_ascii_uppercase().chars().nth(1).unwrap() as i32 - '1' as i32;
     assert!(file > -1 && file < 8);
     assert!(rank > -1 && rank < 8);
     return (rank * 8 + file) as Square;
@@ -717,7 +724,7 @@ lazy_static! {
     };
     pub static ref SAN_REGEX: Regex = {
         let regex =
-            Regex::new(r"^([NBKRQ])?([a-h])?([1-8])?[\-x]?([a-h][1-8])(=?[nbrqkNBRQK])?[\+#]?\Z");
+            Regex::new(r"^([NBKRQ])?([a-h])?([1-8])?[\-x]?([a-h][1-8])(=?[nbrqkNBRQK])?[\+#]?");
         regex.unwrap()
     };
     pub static ref FEN_CASTLING_REGEX: Regex = {
@@ -765,9 +772,9 @@ impl Piece {
 }
 #[derive(PartialEq, Clone, Copy)]
 pub struct Move {
-    from_square: Square,
-    to_square: Square,
-    promotion: Option<PieceType>,
+    pub from_square: Square,
+    pub to_square: Square,
+    pub promotion: Option<PieceType>,
 }
 impl Boolean for Option<Square>{
     fn bool(&self) -> bool {
@@ -786,7 +793,7 @@ impl Boolean for Bitboard {
 }
 impl Boolean for Move {
     fn bool(&self) -> bool {
-        self.from_square.bool() || self.from_square.bool() || self.promotion.bool()
+        self.from_square.bool() || self.to_square.bool() || self.promotion.bool()
     }
 }
 impl Boolean for bool {
@@ -921,7 +928,7 @@ impl BaseBoard {
             BISHOP => self.bishops,
             ROOK => self.rooks,
             QUEEN => self.queens,
-            KING => self.knights,
+            KING => self.kings,
             _ => {
                 panic!("expected PieceType got: {}", piece_type)
             }
@@ -1020,10 +1027,10 @@ impl BaseBoard {
         let queens_and_bishops = self.queens | self.bishops;
 
         let attackers = (BB_KING_ATTACKS[square as usize] & self.kings)
-            | (BB_KING_ATTACKS[square as usize] & self.knights)
+            | (BB_KNIGHT_ATTACKS[square as usize] & self.knights)
             | (BB_RANK_ATTACKS[square as usize][&rank_pieces] & queens_and_rooks)
-            | (BB_FILE_ATTACKS[square as usize][&file_pieces] & queens_and_bishops)
-            | (BB_DIAG_ATTACKS[square as usize][&diag_pieces] & queens_and_rooks)
+            | (BB_FILE_ATTACKS[square as usize][&file_pieces] & queens_and_rooks)
+            | (BB_DIAG_ATTACKS[square as usize][&diag_pieces] & queens_and_bishops)
             | (BB_PAWN_ATTACKS[(!color) as usize][square as usize] & self.pawns);
 
         attackers & self.occupied_co[color as usize]
@@ -1498,6 +1505,103 @@ impl Board {
     pub fn ply(&self) -> u64 {
         2 * (self.fullmove_number - 1) + (self.turn == BLACK) as u64
     }
+    pub fn find_move(&self, from_square: Square, to_square: Square, mut promotion: Option<PieceType>) -> Move {
+        if promotion.is_none() && self.baseboard.pawns != 0 
+            && BB_SQUARES[from_square as usize] != 0 && BB_SQUARES[to_square as usize] != 0 && BB_BACKRANKS != 0 {
+                promotion = Some(QUEEN);
+        }
+        
+        let m = Move{from_square: from_square, to_square: to_square, promotion: promotion};
+
+        if !self.is_legal(m) {
+            panic!("No matching legal move for {}", m.uci())
+        }
+        m
+
+    }
+    pub fn parse_san(&self, san: &str) -> Move {
+        match san {
+            "O-O"| "O-O+"| "O-O#"| "0-0"| "0-0+"| "0-0#" => {
+                let mut m_opt_iter = self.generate_castling_moves(BB_ALL, BB_ALL)
+                    .filter(|m| self.is_kingside_castling(*m));
+                if let Some(m) = m_opt_iter.next() {
+                    return m;
+                }
+                else {
+                    panic!("illegal san: {}", san);
+                }
+                
+            },
+            "O-O-O"| "O-O-O+"| "O-O-O#"| "0-0-0"| "0-0-0+"| "0-0-0#" => {
+                let mut m_opt_iter = self.generate_castling_moves(BB_ALL, BB_ALL)
+                    .filter(|m| self.is_queenside_castling(*m));
+                if let Some(m) = m_opt_iter.next() {
+                    return m;
+                }
+                else {
+                    panic!("illegal san: {}", san);
+                }
+            }
+            _ => {}
+        }
+
+        let re_match_opt = SAN_REGEX.captures(san);
+
+        if re_match_opt.is_none() {
+            match san {
+                "--" | "Z0" | "0000" | "@@@@" => { return Move::null();},
+                _ => { panic!("invlaid san: {}", san);}
+            }
+        }
+        let re_match = re_match_opt.unwrap();
+        let to_square = parse_square(&re_match[4]);
+        let mut to_mask = BB_SQUARES[to_square as usize] & !self.baseboard.occupied_co[self.turn as usize];
+        let p = re_match.get(5).map_or("", |x|x.as_str());
+        let promotion = if p.is_empty() { None } else {piece_type(p.chars().last())};
+        let mut from_file = 0;
+        let mut from_rank = 0;
+        let mut from_mask = BB_ALL;
+        let mut aaa = 0;
+        
+        if let Some(cap) = re_match.get(2){
+            from_file = parse_file_name(cap.as_str().chars().nth(0).unwrap());
+            from_mask &= BB_FILES[from_file as usize];
+        }
+        if let Some(cap) = re_match.get(3) {
+            from_rank = parse_rank_name(cap.as_str().chars().nth(0).unwrap());
+            from_mask &= BB_RANKS[from_rank as usize];
+        }
+
+        if let Some(cap) = re_match.get(1) {
+            let piece_type = piece_type(Some(cap.as_str().chars().nth(0).unwrap().to_ascii_lowercase()));
+            aaa = piece_type.unwrap();
+            from_mask &= self.baseboard.pieces_mask(piece_type.unwrap(), self.turn);
+        }
+        else if re_match.get(2).is_some() && re_match.get(3).is_some() {
+            let m = self.find_move(square(from_file, from_rank), to_square, None);
+            if m.promotion == promotion {
+                return m
+            }
+            else { panic!("missing promotion piece type {} in {}", san, self.baseboard.board_fen(true))}
+        }
+        else {
+            from_mask &= self.baseboard.pawns
+        }
+
+        let mut matched_move = None;
+        for m in self.generate_legal_moves(from_mask, to_mask) {
+            if m.promotion != promotion { continue; }
+
+            if matched_move.is_some() { panic!("ambiguous san: {}", san)}
+
+            matched_move = Some(m);
+
+            if !matched_move.unwrap().bool() {
+                panic!("illegal san: {}", san);
+            } 
+        }
+        matched_move.unwrap()
+    }
     pub fn remove_piece_at(&mut self, square: Square) -> Option<Piece> {
         let piece = self.baseboard.remove_piece_at(square);
         self.clear_stack();
@@ -1557,7 +1661,7 @@ impl Board {
                     single_moves << 8 & !self.baseboard.occupied & (BB_RANK_3 | BB_RANK_4)
             } else {
                 single_moves = pawns >> 8 & !self.baseboard.occupied;
-                double_moves = pawns >> 8 & !self.baseboard.occupied & (BB_RANK_6 | BB_RANK_5);
+                double_moves = single_moves >> 8 & !self.baseboard.occupied & (BB_RANK_6 | BB_RANK_5);
             }
             single_moves &= to_mask;
             double_moves &= to_mask;
@@ -2111,7 +2215,7 @@ impl Board {
                 self.ep_square = Some(m.from_square + 8);
             } else if diff == -16 && square_rank(m.from_square) == 6 {
                 self.ep_square = Some(m.from_square - 8);
-            } else if m.to_square == ep_square.unwrap()
+            } else if ep_square.is_some() && m.to_square == ep_square.unwrap()
                 && (diff.abs() == 7 || diff.abs() == 0)
                 && captured_piece_type != None
             {
@@ -2518,7 +2622,7 @@ impl Board {
                 }
             }
             let checker = msb(checkers);
-            if BB_SQUARES[checkers as usize] == checkers {
+            if BB_SQUARES[checker as usize] == checkers {
                 let target = between(king, checker) | checkers;
 
                 for m in self.generate_pseudo_legal_moves(!self.baseboard.kings & from_mask, target & to_mask) {
@@ -2612,7 +2716,6 @@ impl Board {
 
             for candidate in scan_reversed(self.clean_castling_rights() & backrank & to_mask) {
                 let rook = BB_SQUARES[candidate as usize];
-
                 let a_side = rook < king;
                 let king_to = if a_side {bb_c} else {bb_g};
                 let rook_to = if a_side {bb_d} else {bb_f};
@@ -2620,11 +2723,11 @@ impl Board {
                 let king_path = between(msb(king), msb(king_to));
                 let rook_path = between(candidate, msb(rook_to));
 
-                if ((self.baseboard.occupied ^ king ^ rook) & (king_path | rook_path | king_to | rook_to) != 0
+                if !((self.baseboard.occupied ^ king ^ rook) & (king_path | rook_path | king_to | rook_to) != 0
                     || self.attacked_for_king(king_path | king, self.baseboard.occupied ^ king)
                     || self.attacked_for_king(king_to, self.baseboard.occupied ^ king ^ rook ^ rook_to)) {
 
-                        yield Move{from_square: msb(king), to_square: candidate, promotion: None};
+                        yield Move{from_square: msb(king), to_square: msb(rook), promotion: None};
                     }
             }
         })
@@ -2918,21 +3021,4 @@ impl std::ops::Not for SquareSet {
     fn not(self) -> Self::Output {
         SquareSet { mask: !self.mask }
     }
-}
-fn main() {
-    // let mut b: BaseBoard = BaseBoard::new(None);
-    // b.reset_board();
-    // println!("{:?}", b.board_fen(false));
-    // b.set_board_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR");
-
-    // println!("{:?}", b.board_fen(false));
-    // println!("{}", b.unicode(false, false, "."));
-    // println!("rays: {:?}", rays()[0]);
-    let mut board = Board::new(Some("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"));
-    println!("{}", board.baseboard.unicode(false, false, "."));
-    board.push(Move::from_uci("D2D4"));
-    board.push(Move::from_uci("D7D5"));
-    board.push(Move::from_uci("C2C4"));
-    println!("{}", board.baseboard.unicode(false, false, "."));
-    println!("moves: {:#?}", board.generate_legal_moves(BB_ALL, BB_ALL).collect::<Vec<Move>>());
 }
