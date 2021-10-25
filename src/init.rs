@@ -737,7 +737,7 @@ fn ray(a: Square, b: Square) -> Bitboard {
 }
 fn between(a: Square, b: Square) -> Bitboard {
     let bb = BB_RAYS[a as usize][b as usize] & ((BB_ALL << a) ^ (BB_ALL << b));
-    bb & (bb - 1)
+    bb & (bb.wrapping_sub(1u64) )
 }
 #[derive(Hash, Debug)]
 pub struct Piece {
@@ -1528,7 +1528,8 @@ impl Board {
                     return m;
                 }
                 else {
-                    panic!("illegal san: {}", san);
+                    println!("illegal san: {}", san);
+                    return Move::null();
                 }
                 
             },
@@ -1539,7 +1540,8 @@ impl Board {
                     return m;
                 }
                 else {
-                    panic!("illegal san: {}", san);
+                    println!("illegal san: {}", san);
+                    return Move::null();
                 }
             }
             _ => {}
@@ -1553,16 +1555,17 @@ impl Board {
                 _ => { panic!("invlaid san: {}", san);}
             }
         }
+        // let fen = self.baseboard.board_fen(false);
+        
         let re_match = re_match_opt.unwrap();
         let to_square = parse_square(&re_match[4]);
         let mut to_mask = BB_SQUARES[to_square as usize] & !self.baseboard.occupied_co[self.turn as usize];
         let p = re_match.get(5).map_or("", |x|x.as_str());
-        let promotion = if p.is_empty() { None } else {piece_type(p.chars().last())};
+        let promotion = if p.is_empty() { None } else {piece_type(p.to_lowercase().chars().last())};
         let mut from_file = 0;
         let mut from_rank = 0;
         let mut from_mask = BB_ALL;
         let mut aaa = 0;
-        
         if let Some(cap) = re_match.get(2){
             from_file = parse_file_name(cap.as_str().chars().nth(0).unwrap());
             from_mask &= BB_FILES[from_file as usize];
@@ -1582,25 +1585,46 @@ impl Board {
             if m.promotion == promotion {
                 return m
             }
-            else { panic!("missing promotion piece type {} in {}", san, self.baseboard.board_fen(true))}
+            else { println!("missing promotion piece type {} in {}", san, self.baseboard.board_fen(true)); return Move::null()}
+        }
+        else if re_match.get(5).is_some() && re_match.get(2).is_none() && re_match.get(3).is_none() && re_match.get(4).is_some(){
+            let mut chars = re_match.get(4).unwrap().as_str().chars();
+            let file = parse_file_name(chars.next().unwrap());
+            let mut rank = parse_rank_name(chars.next().unwrap());
+            if self.turn { rank -= 1} else {rank += 1}
+            from_mask &= BB_FILES[file as usize];
+            from_mask &= BB_RANKS[rank as usize];
+
+            let m = self.find_move(square(file, rank), to_square, promotion);
+            if m.promotion == promotion {
+                return m;
+            }
+            else { println!("missing promotion piece type {} in {}", san, self.baseboard.board_fen(true)); return Move::null()}
         }
         else {
             from_mask &= self.baseboard.pawns
         }
 
         let mut matched_move = None;
+            //println!("fen2: {}", self.baseboard.board_fen(true));
         for m in self.generate_legal_moves(from_mask, to_mask) {
             if m.promotion != promotion { continue; }
 
-            if matched_move.is_some() { panic!("ambiguous san: {}", san)}
+            if matched_move.is_some() {println!("fen: {}", self.baseboard.board_fen(false));  println!("ambiguous san: {}", san); return Move::null();}
 
             matched_move = Some(m);
 
             if !matched_move.unwrap().bool() {
-                panic!("illegal san: {}", san);
+                println!("illegal san: {}", san);
+                return Move::null();
             } 
         }
-        matched_move.unwrap()
+        // println!("fen2: {}, {}", self.baseboard.board_fen(false), san);
+        match matched_move {
+            Some(m) => {return m;},
+            None => {println!("fen: {}", self.baseboard.board_fen(false)); println!("invalid move: {}", san); return Move::null();}
+        }
+        //matched_move.unwrap()
     }
     pub fn remove_piece_at(&mut self, square: Square) -> Option<Piece> {
         let piece = self.baseboard.remove_piece_at(square);
@@ -1646,6 +1670,28 @@ impl Board {
                     & self.baseboard.occupied_co[!self.turn as usize]
                     & to_mask;
                 for to_square in scan_reversed(targets) {
+                    if square_rank(to_square) == 0 || square_rank(to_square) == 7 {
+                        yield Move {
+                            from_square: from_square as Square,
+                            to_square: to_square as Square,
+                            promotion: Some(QUEEN),
+                        };
+                        yield Move {
+                            from_square: from_square as Square,
+                            to_square: to_square as Square,
+                            promotion: Some(ROOK),
+                        };
+                        yield Move {
+                            from_square: from_square as Square,
+                            to_square: to_square as Square,
+                            promotion: Some(BISHOP),
+                        };
+                        yield Move {
+                            from_square: from_square as Square,
+                            to_square: to_square as Square,
+                            promotion: Some(KNIGHT),
+                        };
+                    }
                     yield Move {
                         from_square: from_square as Square,
                         to_square: to_square as Square,
@@ -1672,7 +1718,28 @@ impl Board {
                 } else {
                     (8 as u8).wrapping_neg()
                 });
-
+                if square_rank(to_square) == 0 || square_rank(to_square) == 7 {
+                    yield Move {
+                        from_square: from_square as Square,
+                        to_square: to_square as Square,
+                        promotion: Some(QUEEN),
+                    };
+                    yield Move {
+                        from_square: from_square as Square,
+                        to_square: to_square as Square,
+                        promotion: Some(ROOK),
+                    };
+                    yield Move {
+                        from_square: from_square as Square,
+                        to_square: to_square as Square,
+                        promotion: Some(BISHOP),
+                    };
+                    yield Move {
+                        from_square: from_square as Square,
+                        to_square: to_square as Square,
+                        promotion: Some(KNIGHT),
+                    };
+                }
                 yield Move {
                     from_square: from_square as Square,
                     to_square: to_square as Square,
@@ -1705,8 +1772,8 @@ impl Board {
         to_mask: Bitboard,
     ) -> impl Iterator<Item = Move> + '_{
         gen_iter!({
-            if self.ep_square != None
-                || (!BB_SQUARES[self.ep_square.unwrap() as usize] & to_mask) != 0
+            if self.ep_square.is_none()
+                || (BB_SQUARES[self.ep_square.unwrap() as usize] & to_mask) == 0
             {
                 return;
             }
@@ -2216,8 +2283,8 @@ impl Board {
             } else if diff == -16 && square_rank(m.from_square) == 6 {
                 self.ep_square = Some(m.from_square - 8);
             } else if ep_square.is_some() && m.to_square == ep_square.unwrap()
-                && (diff.abs() == 7 || diff.abs() == 0)
-                && captured_piece_type != None
+                && (diff.abs() == 7 || diff.abs() == 9)
+                && captured_piece_type.is_none() 
             {
                 let down = if self.turn == WHITE {
                     (8 as u8).wrapping_neg()
@@ -2542,12 +2609,12 @@ impl Board {
     }
     pub fn _ep_skewered(&self, king: Square, capturer: Square) -> bool {
         assert!(self.ep_square != None);
-        let last_double = self.ep_square.unwrap()
-            + if self.turn == WHITE {
+        let last_double = self.ep_square.unwrap().wrapping_add(
+             if self.turn == WHITE {
                 (8 as u8).wrapping_neg()
             } else {
                 8
-            };
+            });
         let occupancy = self.baseboard.occupied
             & !BB_SQUARES[last_double as usize]
             & !BB_SQUARES[capturer as usize]

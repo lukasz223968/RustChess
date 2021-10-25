@@ -1,14 +1,14 @@
 
 
-use std::{cell::RefCell, collections::{HashMap, HashSet, VecDeque}, io::Error, rc::Rc};
+use std::{cell::RefCell, collections::{HashMap, HashSet, VecDeque}, io::{Error, ErrorKind}, rc::Rc};
 use std::fs::File;
 use std::io::{self, prelude::*};
 
 use regex::Regex;
-use crate::{gen_iter, init::{Move, Board, BaseBoard, Color}};
+use crate::{gen_iter, init::{Move, Board, BaseBoard, Color, Boolean}};
 use lazy_static::lazy_static;
 use std::ops::Index;
-
+use thiserror::Error;
 
 const NAG_NULL: u8 = 0;
 const NAG_GOOD_MOVE: u8 = 1;
@@ -42,6 +42,7 @@ const NAG_WHITE_SEVERE_TIME_PRESSURE: u8 = 138;
 const NAG_BLACK_SEVERE_TIME_PRESSURE: u8 = 139;
 const NAG_NOVELTY: u8 = 146;
 
+
 macro_rules! create_regex{
     ($name: ident, $s: tt) => {
         lazy_static!(
@@ -53,7 +54,7 @@ macro_rules! create_regex{
     }
 }
 create_regex!(TAG_REGEX, r#"^\[([A-Za-z0-9_]+)\s+"([^\r]*)"\]\s*$"#);
-create_regex!(TAG_NAME_REGEX, r"^[A-Za-z0-9_]+\Z");
+create_regex!(TAG_NAME_REGEX, r"^[A-Za-z0-9_]+");
 create_regex!(MOVETEXT_REGEX, r"(?s)([NBKRQ]?[a-h]?[1-8]?[\-x]?[a-h][1-8](?:=?[nbrqkNBRQK])?|[PNBRQK]?@[a-h][1-8]|--|Z0|0000|@@@@|O-O(?:-O)?|0-0(?:-0)?)|(\{.*)|(;.*)|(\$[0-9]+)|(\()|(\))|(\*|1-0|0-1|1/2-1/2)|([\?!]{1,2})");
 create_regex!(SKIP_MOVETEXT_REGEX, r";|\{|\}");
 create_regex!(CLOCK_REGEX, r"\[%clk\s(\d+):(\d+):(\d+(?:\.\d*)?)\]");
@@ -416,7 +417,11 @@ impl Headers {
     }
     pub fn get(&self, key: &str) -> Option<&str>{
         if TAG_ROASTER.contains(&key){
-            return Some(self.tag_roaster.get(key).unwrap())
+            // return Some(self.tag_roaster.get(key).unwrap())
+            match self.tag_roaster.get(key) {
+                Some(tag) => { return Some(tag)},
+                None => { return None}
+            }
         }
         if let Some(a) = self.others.get(key) { Some(a) } else { None }
     }
@@ -531,7 +536,7 @@ impl GameBuilder {
         self.variation_stack.pop();
     }
     fn visit_result(&mut self, result: &str) {
-        if let Some(key) = self.game.headers.get("Result"){
+        if self.game.headers.get("Result").is_none(){
             self.game.headers.set("Result", result);
         }
     }
@@ -591,7 +596,13 @@ fn isspace(s: &str) -> bool {
 fn read_line_or_empty<'buf>(handle: &mut BufReader, buffer: &'buf mut String ) -> &'buf str {
     match handle.read_line(buffer) {Some(s) => {s.expect("error while reading line")}, None => {""}}
 }
-pub fn read_game(mut handle: BufReader) -> Result<Rc<RefCell<GameBuilder>> , std::io::Error> {
+fn read_until_end_of_game<'buf>(handle: &mut BufReader, buffer: &'buf mut String) {
+    let mut line = read_line_or_empty(handle, buffer);
+    while !isspace(line){
+        line = read_line_or_empty(handle, buffer);
+    }
+}
+pub fn read_game(mut handle: &mut BufReader) -> Result<Rc<RefCell<GameBuilder>>, ParsingError> {
     let mut visitor = Rc::new(RefCell::new(GameBuilder::new_and_begin()));
 
     let mut found_game = false;
@@ -602,10 +613,19 @@ pub fn read_game(mut handle: BufReader) -> Result<Rc<RefCell<GameBuilder>> , std
 
     let mut board: Board = Board::new(None);
 
-    let mut line = handle.read_line(&mut buffer).expect("Couldnt read first line of the file")?.trim_start_matches("\u{feff}");
+    let mut line = match handle.read_line(&mut buffer) {
+        Some(line) => { line.unwrap().trim_start_matches("\u{feff}")}
+        None => { return Err(ParsingError::ReadLineError);}
+    };
+
+    //let mut line = handle.read_line(&mut buffer).expect("Couldnt read first line of the file")?.trim_start_matches("\u{feff}");
 
     while isspace(line) || line.starts_with("%") || line.starts_with(";") {
-        line = handle.read_line(&mut buffer).expect("error while reading the line")?;
+        //line = handle.read_line(&mut buffer).expect("error while reading the line").unwrap();
+        line = match handle.read_line(&mut buffer) {
+            Some(l) => {l.unwrap()},
+            _ => { println!("i: {}", unsafe{crate::I}); return Err(ParsingError::InvalidMoveError);}
+        }
     }
     
     let mut consecutive_empty_lines = 0;
@@ -643,7 +663,7 @@ pub fn read_game(mut handle: BufReader) -> Result<Rc<RefCell<GameBuilder>> , std
         line = read_line_or_empty(&mut handle, &mut buffer);
 
     }
-    if !found_game { return Err(Error::new(io::ErrorKind::Other, "Empty game")); }
+    if !found_game { return Err(ParsingError::EmptyMoves); }
 
     if !skipping_game {
         skipping_game = false;
@@ -685,6 +705,10 @@ pub fn read_game(mut handle: BufReader) -> Result<Rc<RefCell<GameBuilder>> , std
             }
             else {
                 let m = visitor.borrow().parse_san(&board, token);
+                if !m.bool() {
+                    read_until_end_of_game(&mut handle, &mut buffer);
+                    return Err(ParsingError::InvalidMoveError);
+                }
                 visitor.borrow_mut().visit_move(&board, m);
                 board.push(m);
                 visitor.borrow().visit_board(&board);
@@ -697,6 +721,15 @@ pub fn read_game(mut handle: BufReader) -> Result<Rc<RefCell<GameBuilder>> , std
     Ok(visitor)
 }
 
+#[derive(Error, Debug)]
+pub enum ParsingError {
+    #[error("Error while reading the line")]
+    ReadLineError,
+    #[error("Error while reading the line")]
+    InvalidMoveError,
+    #[error("Error while reading the line")]
+    EmptyMoves
+}
 
 
 
